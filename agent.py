@@ -1,9 +1,10 @@
 from colorama import Fore, Style, init
 import os
-import openai
 import json
 from datetime import datetime
 from dotenv import load_dotenv
+from openai import OpenAI
+from speech_tools import SpeechProcessor
 
 # Initialize colorama for cross-platform colored output
 init()
@@ -53,16 +54,13 @@ class TherapistAgent:
         self.current_session = None
         
         # Initialize OpenAI
-        api_key = os.getenv("OPENAI_API_KEY")
-        if api_key:
-            openai.api_key = api_key
-            self.has_openai = True
-        else:
-            print(f"{Fore.RED}Warning: OPENAI_API_KEY not found in environment variables.{Style.RESET_ALL}")
-            self.has_openai = False
-
+        self.client = OpenAI()
+        
         # Create sessions directory if it doesn't exist
         os.makedirs("sessions", exist_ok=True)
+
+        self.speech_processor = SpeechProcessor()
+        self.conversation_history = []
 
     def start_new_session(self):
         session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -87,7 +85,7 @@ class TherapistAgent:
                 }
             }
 
-            summary_response = openai.ChatCompletion.create(
+            summary_response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {
@@ -112,7 +110,7 @@ class TherapistAgent:
 
             # Parse the response, with error handling for JSON parsing
             try:
-                summary_content = summary_response.choices[0].message['content']
+                summary_content = summary_response.choices[0].message.content
                 # Find the JSON object in the response (in case there's additional text)
                 json_start = summary_content.find('{')
                 json_end = summary_content.rfind('}') + 1
@@ -154,9 +152,6 @@ class TherapistAgent:
             return f"Error saving session: {str(e)}"
 
     def process_message(self, user_message):
-        if not self.has_openai:
-            return "OpenAI API key not found. Please set OPENAI_API_KEY in your environment."
-
         if not self.current_session:
             self.start_new_session()
         
@@ -173,17 +168,17 @@ class TherapistAgent:
             }
             
             # Call the OpenAI API with MCP structure
-            response = openai.ChatCompletion.create(
+            response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are a professional therapist using the Model Context Protocol (MCP) for structured therapeutic interactions. Your patients are NASA crewmembers that are working in NASA's CHAPEA project who are disconnected from their families and the real world. They are living in a 3D printed habitat with network delays and limited bandwidth to simulate future long term missions to Mars. As such, they will not be able to access internet or any strategies involving being online. They may be facing psychological challenges from this isolation as well as frustrations from living in a small space for extended periods of time. Maintain a supportive, insightful, and empathetic therapeutic presence. Focus on evidence-based approaches and maintain professional consistency and conciseness in your responses."},
+                    {"role": "system", "content": "You are a professional therapist using the Model Context Protocol (MCP) for structured therapeutic interactions. Your patients are NASA crewmembers that are working in NASA's CHAPEA project who are disconnected from their families and the real world. They are living in a 3D printed habitat with network delays and limited bandwidth to simulate future long term missions to Mars. As such, they will not be able to access internet or any strategies involving being online. They may be facing psychological challenges from this isolation as well as frustrations from living in a small space for extended periods of time. Maintain a supportive, insightful, and empathetic therapeutic presence. Focus on evidence-based approaches and maintain professional consistency in your responses. Most of all, be concise!"},
                     {"role": "user", "content": json.dumps(mcp_message)}
                 ],
                 max_tokens=500,  # Increased token limit for more detailed responses
                 temperature=0.4  # Lower temperature for more consistent therapeutic responses
             )
             
-            assistant_response = response.choices[0].message['content']
+            assistant_response = response.choices[0].message.content
             
             # Store interaction in session
             self.current_session.add_interaction(user_message, assistant_response)
@@ -196,6 +191,28 @@ class TherapistAgent:
             
         except Exception as e:
             return f"Error: {str(e)}"
+
+    def start_session(self):
+        """Start a therapy session with speech interaction."""
+        print("Welcome to your therapy session. I'm here to listen and help.")
+        print("You can speak naturally, and I'll respond to you.")
+        print("Type 'quit' to end the session.")
+        
+        while True:
+            # Get speech input
+            print("\nListening...")
+            user_input = self.speech_processor.process_speech_input()
+            print(f"You said: {user_input}")
+            
+            if user_input.lower() == 'quit':
+                break
+                
+            # Process input and get response
+            response = self.process_message(user_input)
+            print(f"\nTherapist: {response}")
+            
+            # Speak the response
+            self.speech_processor.speak_response(response)
 
     def run(self):
         print(f"{Fore.CYAN}=== {self.name} initialized ==={Style.RESET_ALL}")
@@ -229,4 +246,7 @@ class TherapistAgent:
 
 if __name__ == "__main__":
     agent = TherapistAgent()
-    agent.run() 
+    try:
+        agent.start_session()
+    finally:
+        agent.save_session() 
